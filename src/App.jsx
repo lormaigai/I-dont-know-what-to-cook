@@ -34,7 +34,8 @@ function ShelfItem({ item, onRemove }) {
     <button
       className="shelf-item"
       style={{ '--tilt': `${tilt(item.id)}deg` }}
-      onClick={() => onRemove(item.id)}
+      onClick={event => onRemove(item.id, event.currentTarget)}
+      data-shelf-item={item.id}
       aria-label={`Put ${item.name} back`}
       title={`${item.name} - tap to put back`}
     >
@@ -52,6 +53,25 @@ function ZoneShelf({ zoneId, label, selected, onRemove, className = '' }) {
         {items.map(item => <ShelfItem key={item.id} item={item} onRemove={onRemove} />)}
       </div>
       <span className="zone-label">{label}</span>
+    </div>
+  )
+}
+
+function ClosedKitchen({ state, onOpen }) {
+  return (
+    <div className={`closed-kitchen ${state === 'opening' ? 'opening' : ''}`}>
+      <button className="closed-fridge" onClick={onOpen} disabled={state === 'opening'} aria-label="Open the fridge">
+        <span className="closed-freezer-door"><span className="closed-handle top" /></span>
+        <span className="closed-main-door"><span className="closed-handle bottom" /></span>
+        <span className="fridge-inside" aria-hidden="true">
+          <span className="inside-shelf one" /><span className="inside-shelf two" /><span className="inside-drawer" />
+        </span>
+      </button>
+      <div className="closed-pantry" aria-hidden="true"><span className="pantry-knob" /></div>
+      <div className="open-prompt">
+        <p>{state === 'opening' ? 'opening the fridge…' : 'start with what you have'}</p>
+        {state !== 'opening' && <button className="btn btn-primary open-btn" onClick={onOpen}>open the fridge →</button>}
+      </div>
     </div>
   )
 }
@@ -176,10 +196,12 @@ const TRANSITION_BEATS = ['closing the fridge…', 'peeking at the menu…', 'pl
 export default function App() {
   const [selected, setSelected] = useState(loadSelected)
   const [view, setView] = useState('fridge') // fridge | transition | results
+  const [entrance, setEntrance] = useState('closed') // closed | opening | open
   const [closing, setClosing] = useState(false)
   const [beat, setBeat] = useState(0)
   const [pickerSearch, setPickerSearch] = useState('')
   const timers = useRef([])
+  const moving = useRef(new Set())
 
   useEffect(() => {
     try { localStorage.setItem(LS_SELECTED, JSON.stringify([...selected])) } catch {}
@@ -187,14 +209,59 @@ export default function App() {
 
   useEffect(() => () => timers.current.forEach(clearTimeout), [])
 
-  const toggle = useCallback(id => {
-    setSelected(prev => {
+  const openFridge = useCallback(() => {
+    if (entrance !== 'closed') return
+    setEntrance('opening')
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    timers.current.push(setTimeout(() => setEntrance('open'), reduceMotion ? 80 : 1050))
+  }, [entrance])
+
+  const moveIngredient = useCallback((id, sourceEl) => {
+    if (moving.current.has(id)) return
+    const item = findItem(id)
+    if (!item) return
+    const adding = !selected.has(id)
+    const destination = adding
+      ? document.querySelector(`[data-zone="${item.zone}"] .zone-items`)
+      : document.querySelector(`[data-picker-item="${id}"]`)
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+
+    const commit = () => setSelected(prev => {
       const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
+      if (adding) next.add(id)
+      else next.delete(id)
       return next
     })
-  }, [])
+
+    if (reduceMotion || !sourceEl || !destination) { commit(); return }
+
+    moving.current.add(id)
+    const from = sourceEl.getBoundingClientRect()
+    const to = destination.getBoundingClientRect()
+    const flyer = document.createElement('div')
+    flyer.className = 'ingredient-flyer'
+    flyer.setAttribute('aria-hidden', 'true')
+    flyer.innerHTML = `<span>${item.emoji}</span><small>${item.name}</small>`
+    document.body.appendChild(flyer)
+    Object.assign(flyer.style, {
+      left: `${from.left + from.width / 2}px`,
+      top: `${from.top + from.height / 2}px`,
+    })
+    sourceEl.classList.add('moving-ingredient')
+    const dx = to.left + Math.min(to.width / 2, 54) - (from.left + from.width / 2)
+    const dy = to.top + to.height / 2 - (from.top + from.height / 2)
+    const motion = flyer.animate([
+      { transform: 'translate(-50%, -50%) scale(.9) rotate(0deg)', opacity: 1 },
+      { transform: `translate(calc(-50% + ${dx * .55}px), calc(-50% + ${dy * .25 - 22}px)) scale(1.18) rotate(-7deg)`, opacity: 1, offset: .52 },
+      { transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px)) scale(.72) rotate(4deg)`, opacity: .15 },
+    ], { duration: 620, easing: 'cubic-bezier(.25,.75,.25,1)', fill: 'forwards' })
+    motion.finished.catch(() => {}).finally(() => {
+      commit()
+      flyer.remove()
+      sourceEl.classList.remove('moving-ingredient')
+      moving.current.delete(id)
+    })
+  }, [selected])
 
   const generate = useCallback(() => {
     if (view !== 'fridge') return
@@ -241,19 +308,27 @@ export default function App() {
           </div>
           {view === 'results' ? (
             <button className="btn btn-ghost" onClick={backToFridge}>← restock the fridge</button>
-          ) : (
+          ) : entrance === 'open' ? (
             <span className="stock-count">{selected.size} stocked</span>
+          ) : (
+            <span className="stock-count">fridge closed</span>
           )}
         </div>
       </header>
 
       {view !== 'results' && (
         <main className={`fridge-view ${view === 'transition' ? 'transitioning' : ''}`}>
-          <div className="kitchen-wrap">
-            <Kitchen selected={selected} onRemove={toggle} closing={closing} />
+          {entrance !== 'open' ? (
+            <div className="entrance-wrap">
+              <ClosedKitchen state={entrance} onOpen={openFridge} />
+            </div>
+          ) : (
+            <>
+          <div className="kitchen-wrap kitchen-reveal">
+            <Kitchen selected={selected} onRemove={moveIngredient} closing={closing} />
           </div>
 
-          <aside className="picker">
+          <aside className="picker picker-reveal">
             <div className="picker-head">
               <h2 className="picker-title">stock your kitchen</h2>
               {selected.size > 0 && (
@@ -287,7 +362,8 @@ export default function App() {
                       <button
                         key={item.id}
                         className={`ing-btn ${selected.has(item.id) ? 'selected' : ''}`}
-                        onClick={() => toggle(item.id)}
+                        onClick={event => moveIngredient(item.id, event.currentTarget)}
+                        data-picker-item={item.id}
                         aria-pressed={selected.has(item.id)}
                       >
                         <span className="ing-emoji" aria-hidden="true">{item.emoji}</span>
@@ -300,8 +376,10 @@ export default function App() {
               )
             })}
           </aside>
+            </>
+          )}
 
-          <div className="generate-bar">
+          {entrance === 'open' && <div className="generate-bar">
             <div className="generate-inner">
               <span className="generate-note">
                 {selected.size === 0
@@ -312,7 +390,7 @@ export default function App() {
                 what can i cook? →
               </button>
             </div>
-          </div>
+          </div>}
 
           {view === 'transition' && (
             <div className="transition-overlay" role="status" aria-live="polite">
@@ -332,7 +410,7 @@ export default function App() {
         <main className="results-view">
           <div className="menu-frame">
             <p className="menu-kicker">tonight's menu, from your fridge</p>
-            <h2 className="menu-wordmark">hon's kitchen</h2>
+            <h2 className="menu-wordmark">today's menu</h2>
             <p className="menu-sub">
               {matchCount > 0
                 ? `${matchCount} dish${matchCount === 1 ? '' : 'es'} ready with what you stocked`
@@ -353,10 +431,7 @@ export default function App() {
             <button className="btn btn-primary" onClick={backToFridge}>← restock the fridge</button>
           </div>
 
-          <footer className="foot">
-            made by <a href="https://lormaigai.github.io" target="_blank" rel="noreferrer">angela</a> ·
-            your picks stay in your browser
-          </footer>
+          <footer className="foot">your picks stay in your browser</footer>
         </main>
       )}
     </div>

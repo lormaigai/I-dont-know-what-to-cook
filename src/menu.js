@@ -1,4 +1,4 @@
-// Angela's menu, from her "HON'S KITCHEN" PDF (pages 1-3).
+// Menu dishes available to the fridge matcher.
 // Dishes are menu-card results only - no steps, by her request.
 // needs: all must be in the fridge. needsAny: at least one. A dish with
 // neither is a "menu pick" - always shown, not gated on what's stocked.
