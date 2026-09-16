@@ -1,50 +1,17 @@
-import { useState, useMemo, useEffect, useCallback } from 'react'
-import { INGREDIENT_GROUPS, RECIPES } from './recipes.js'
-
-const ALL_ITEMS = INGREDIENT_GROUPS.flatMap(g => g.items)
-const findItem = id => ALL_ITEMS.find(i => i.id === id)
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
+import { INGREDIENT_GROUPS, ALL_ITEMS, findItem } from './ingredients.js'
+import { MEALS, MENU, scoreDish } from './menu.js'
 
 const LS_SELECTED = 'wic_selected'
-const LS_FAVS = 'wic_favs'
 
-function loadSet(key) {
+function loadSelected() {
   try {
-    const raw = localStorage.getItem(key)
+    const raw = localStorage.getItem(LS_SELECTED)
     if (!raw) return new Set()
-    return new Set(JSON.parse(raw))
+    const ids = JSON.parse(raw).filter(id => findItem(id))
+    return new Set(ids)
   } catch { return new Set() }
 }
-function saveSet(key, set) {
-  try { localStorage.setItem(key, JSON.stringify([...set])) } catch {}
-}
-
-function scoreRecipe(recipe, selectedSet) {
-  const required = recipe.required || []
-  const optional = recipe.optional || []
-  const cookware = recipe.cookware || []
-
-  const missingRequired = required.filter(r => !selectedSet.has(r))
-  const hasCookware = cookware.length === 0 || cookware.some(c => selectedSet.has(c))
-  const missingCookware = (!hasCookware && cookware.length > 0) ? 1 : 0
-  const totalMissing = missingRequired.length + missingCookware
-  const bonusMatches = optional.filter(o => selectedSet.has(o)).length
-
-  const needed = required.length + (cookware.length > 0 ? 1 : 0)
-  const have = required.length - missingRequired.length + (cookware.length > 0 && hasCookware ? 1 : 0)
-
-  return {
-    recipe,
-    totalMissing,
-    missingRequired,
-    missingCookware,
-    bonusMatches,
-    canMake: totalMissing === 0,
-    needed,
-    have,
-  }
-}
-
-const stripEmoji = label => label.replace(/^[^\w&]+\s*/u, '')
 
 function Squiggle({ className }) {
   return (
@@ -55,245 +22,264 @@ function Squiggle({ className }) {
   )
 }
 
-function IngChip({ id, have, optional, isCookware }) {
-  const item = findItem(id)
-  if (!item) return null
-  let cls = 'ing-chip'
-  if (have) cls += ' have'
-  else if (!optional) cls += ' missing'
-  if (optional) cls += ' optional'
-  if (isCookware) cls += ' cookware'
+// deterministic little tilt so shelf items feel hand-placed
+function tilt(id) {
+  let h = 0
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) % 997
+  return (h % 11) - 5 // -5..5 deg
+}
+
+function ShelfItem({ item, onRemove }) {
   return (
-    <span className={cls} title={`${optional ? 'Optional: ' : ''}${item.name}`}>
-      {item.emoji} {item.name}
-    </span>
+    <button
+      className="shelf-item"
+      style={{ '--tilt': `${tilt(item.id)}deg` }}
+      onClick={event => onRemove(item.id, event.currentTarget)}
+      data-shelf-item={item.id}
+      aria-label={`Put ${item.name} back`}
+      title={`${item.name} - tap to put back`}
+    >
+      <span className="shelf-item-emoji" aria-hidden="true">{item.emoji}</span>
+      <span className="shelf-item-name">{item.name}</span>
+    </button>
   )
 }
 
-function MatchBar({ have, needed }) {
-  const pct = needed === 0 ? 100 : Math.round((have / needed) * 100)
+function ZoneShelf({ zoneId, label, selected, onRemove, className = '' }) {
+  const items = ALL_ITEMS.filter(i => i.zone === zoneId && selected.has(i.id))
   return (
-    <div className="match-row" aria-label={`You have ${have} of ${needed} needed items`}>
-      <div className="match-bar"><span style={{ width: `${pct}%` }} /></div>
-      <span className="match-label">{have}/{needed}</span>
+    <div className={`zone ${className} ${items.length > 8 ? 'crowded' : ''}`} data-zone={zoneId}>
+      <div className="zone-items">
+        {items.map(item => <ShelfItem key={item.id} item={item} onRemove={onRemove} />)}
+      </div>
+      <span className="zone-label">{label}</span>
     </div>
   )
 }
 
-function RecipeCard({ recipe, selectedSet, onSelect, isFav, onToggleFav, index }) {
-  const required = recipe.required || []
-  const optional = recipe.optional || []
-  const cookware = recipe.cookware || []
-  const s = scoreRecipe(recipe, selectedSet)
-
+function ClosedKitchen({ state, onOpen }) {
   return (
-    <article
-      className="recipe-card"
-      onClick={() => onSelect(recipe)}
-      style={{ animationDelay: `${Math.min(index || 0, 14) * 28}ms` }}
-    >
-      <button
-        className={`fav-btn ${isFav ? 'on' : ''}`}
-        onClick={e => { e.stopPropagation(); onToggleFav(recipe.id) }}
-        aria-label={isFav ? `Remove ${recipe.name} from favourites` : `Save ${recipe.name} to favourites`}
-        aria-pressed={isFav}
-      >
-        {isFav ? '★' : '☆'}
+    <div className={`closed-kitchen ${state === 'opening' ? 'opening' : ''}`}>
+      <button className="closed-fridge" onClick={onOpen} disabled={state === 'opening'} aria-label="Open the fridge">
+        <span className="closed-freezer-door"><span className="closed-handle top" /></span>
+        <span className="closed-main-door"><span className="closed-handle bottom" /></span>
+        <span className="fridge-inside" aria-hidden="true">
+          <span className="inside-shelf one" /><span className="inside-shelf two" /><span className="inside-drawer" />
+        </span>
       </button>
-      <div className="card-top">
-        <span className="card-emoji" aria-hidden="true">{recipe.emoji}</span>
-        <div className="card-head">
-          <h3 className="recipe-name">{recipe.name}</h3>
-          <div className="card-meta">
-            <span>⏱ {recipe.time}</span>
-            <span className="dot" aria-hidden="true" />
-            <span>{recipe.difficulty}</span>
-          </div>
+      <div className="closed-pantry" aria-hidden="true"><span className="pantry-knob" /></div>
+      <div className="open-prompt">
+        <p>{state === 'opening' ? 'opening the fridge…' : 'start with what you have'}</p>
+        {state !== 'opening' && <button className="btn btn-primary open-btn" onClick={onOpen}>open the fridge →</button>}
+      </div>
+    </div>
+  )
+}
+
+function Kitchen({ selected, onRemove, closing }) {
+  return (
+    <div className={`kitchen ${closing ? 'closing' : ''}`}>
+      <div className="fridge-door" aria-label="Fridge door rack">
+        <div className="door-rack">
+          <ZoneShelf zoneId="door" label="door rack" selected={selected} onRemove={onRemove} />
+        </div>
+        <span className="door-handle" aria-hidden="true" />
+      </div>
+
+      <div className="fridge" aria-label="Fridge">
+        <div className="freezer">
+          <ZoneShelf zoneId="freezer" label="freezer" selected={selected} onRemove={onRemove} />
+        </div>
+        <div className="fridge-body">
+          <ZoneShelf zoneId="shelf-top" label="top shelf" selected={selected} onRemove={onRemove} className="shelf" />
+          <ZoneShelf zoneId="shelf-mid" label="middle shelf" selected={selected} onRemove={onRemove} className="shelf" />
+          <ZoneShelf zoneId="crisper" label="crisper drawer" selected={selected} onRemove={onRemove} className="crisper" />
         </div>
       </div>
-      <p className="recipe-desc">{recipe.description}</p>
-      {selectedSet.size > 0 && <MatchBar have={s.have} needed={s.needed} />}
-      <div className="recipe-ingredients">
-        {required.map(id => (
-          <IngChip key={id} id={id} have={selectedSet.has(id)} optional={false} />
-        ))}
-        {optional.map(id => (
-          <IngChip key={id} id={id} have={selectedSet.has(id)} optional={true} />
-        ))}
-        {cookware.map(id => (
-          <IngChip key={id} id={id} have={selectedSet.has(id)} optional={false} isCookware />
-        ))}
+
+      <div className="pantry" aria-label="Pantry">
+        <div className="pantry-shelf">
+          <ZoneShelf zoneId="pantry" label="pantry" selected={selected} onRemove={onRemove} />
+        </div>
       </div>
+    </div>
+  )
+}
+
+function IngChip({ id, have, missing }) {
+  const item = findItem(id)
+  if (!item) return null
+  const cls = have ? 'ing-chip have' : missing ? 'ing-chip missing' : 'ing-chip'
+  return <span className={cls}>{item.emoji} {item.name}</span>
+}
+
+function DishCard({ scored, selectedSet, index }) {
+  const { dish, isPick, matched, missing, anyMissing } = scored
+  const needsAny = dish.needsAny || []
+  const gap = missing.length + (anyMissing ? 1 : 0)
+  const farOff = !matched && !isPick && gap > 2
+  return (
+    <article className={`dish-card ${matched ? 'matched' : ''}`}
+      style={{ animationDelay: `${Math.min(index || 0, 16) * 30}ms` }}>
+      <div className="dish-head">
+        <h3 className="dish-name">{dish.name}</h3>
+        <span className={`dish-tag ${matched ? 'tag-match' : (isPick || farOff) ? 'tag-pick' : 'tag-almost'}`}>
+          {matched ? 'from your fridge' : (isPick || farOff) ? 'menu pick' : 'almost'}
+        </span>
+      </div>
+      {dish.desc && <p className="dish-desc">{dish.desc}</p>}
+      {!isPick && selectedSet.size > 0 && (
+        <div className="dish-ings">
+          {(dish.needs || []).map(id => (
+            <IngChip key={id} id={id} have={selectedSet.has(id)} missing={!selectedSet.has(id)} />
+          ))}
+          {needsAny.length > 0 && (
+            anyMissing
+              ? <span className="ing-chip missing">🍗 chicken or fish</span>
+              : <span className="ing-chip have">🍗 chicken or fish</span>
+          )}
+        </div>
+      )}
     </article>
   )
 }
 
-function RecipeModal({ recipe, selectedSet, onClose, isFav, onToggleFav }) {
-  useEffect(() => {
-    if (!recipe) return
-    const onKey = e => { if (e.key === 'Escape') onClose() }
-    document.addEventListener('keydown', onKey)
-    document.body.style.overflow = 'hidden'
-    return () => {
-      document.removeEventListener('keydown', onKey)
-      document.body.style.overflow = ''
-    }
-  }, [recipe, onClose])
+function MealSection({ meal, dishes, selectedSet }) {
+  const matched = []
+  const almost = []
+  const picks = []
+  dishes.forEach(s => {
+    if (s.matched) { matched.push(s); return }
+    const gap = s.missing.length + (s.anyMissing ? 1 : 0)
+    if (!s.isPick && gap <= 2) { almost.push(s); return }
+    picks.push(s)
+  })
 
-  if (!recipe) return null
-  const s = scoreRecipe(recipe, selectedSet)
-
+  let idx = 0
   return (
-    <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label={recipe.name}>
-      <div className="modal" onClick={e => e.stopPropagation()}>
-        <button className="modal-close" onClick={onClose} aria-label="Close recipe">✕</button>
-        <div className="modal-emoji" aria-hidden="true">{recipe.emoji}</div>
-        <h2 className="modal-title">{recipe.name}</h2>
-        <div className="card-meta modal-meta">
-          <span>⏱ {recipe.time}</span>
-          <span className="dot" aria-hidden="true" />
-          <span>{recipe.difficulty}</span>
-          {selectedSet.size > 0 && (
-            <>
-              <span className="dot" aria-hidden="true" />
-              <span className={s.canMake ? 'meta-have' : 'meta-missing'}>
-                {s.canMake ? 'you have everything' : `missing ${s.totalMissing}`}
-              </span>
-            </>
-          )}
-        </div>
-        <p className="modal-desc">{recipe.description}</p>
-
-        <div className="modal-section">
-          <h4>Ingredients</h4>
-          <div className="recipe-ingredients">
-            {(recipe.required || []).map(id => (
-              <IngChip key={id} id={id} have={selectedSet.has(id)} optional={false} />
-            ))}
-            {(recipe.optional || []).map(id => {
-              const item = findItem(id)
-              return item ? (
-                <span key={id} className={`ing-chip optional ${selectedSet.has(id) ? 'have' : ''}`}>
-                  {item.emoji} {item.name} <em>(optional)</em>
-                </span>
-              ) : null
-            })}
-            {(recipe.cookware || []).map(id => (
-              <IngChip key={id} id={id} have={selectedSet.has(id)} optional={false} isCookware />
-            ))}
-          </div>
-        </div>
-
-        <div className="modal-section">
-          <h4>Steps</h4>
-          <ol className="steps-list">
-            {(recipe.steps || []).map((step, i) => (
-              <li key={i}><span className="step-num">{i + 1}</span><span>{step}</span></li>
-            ))}
-          </ol>
-        </div>
-
-        <button
-          className={`btn btn-fav-wide ${isFav ? 'on' : ''}`}
-          onClick={() => onToggleFav(recipe.id)}
-          aria-pressed={isFav}
-        >
-          {isFav ? '★ saved to favourites' : '☆ save to favourites'}
-        </button>
+    <section className="meal-section">
+      <div className="meal-header">
+        <h2 className="meal-title">{meal.label}</h2>
+        {matched.length > 0 && <span className="meal-count">{matched.length} from your fridge</span>}
       </div>
-    </div>
+
+      {matched.length > 0 && (
+        <div className="dish-grid">
+          {matched.map(s => <DishCard key={s.dish.id} scored={s} selectedSet={selectedSet} index={idx++} />)}
+        </div>
+      )}
+
+      {almost.length > 0 && (
+        <>
+          <p className="sub-label">a thing or two away</p>
+          <div className="dish-grid">
+            {almost.map(s => <DishCard key={s.dish.id} scored={s} selectedSet={selectedSet} index={idx++} />)}
+          </div>
+        </>
+      )}
+
+      {picks.length > 0 && (
+        <>
+          <p className="sub-label">{matched.length > 0 || almost.length > 0 ? 'also on the menu' : 'on the menu'}</p>
+          <div className="dish-grid">
+            {picks.map(s => <DishCard key={s.dish.id} scored={s} selectedSet={selectedSet} index={idx++} />)}
+          </div>
+        </>
+      )}
+    </section>
   )
 }
 
-const QUICK_STARTS = [
-  { label: '🥞 breakfast staples', ids: ['pan', 'egg', 'butter', 'bread'] },
-  { label: '🍝 pasta night', ids: ['pot', 'pasta', 'garlic', 'oliveoil', 'cheese'] },
-  { label: '🍚 clean-out-the-fridge rice', ids: ['pan', 'rice', 'egg', 'soysauce'] },
-]
+const TRANSITION_BEATS = ['closing the fridge…', 'peeking at the menu…', 'plating up…']
 
 export default function App() {
-  const [selected, setSelected] = useState(() => loadSet(LS_SELECTED))
-  const [favs, setFavs] = useState(() => loadSet(LS_FAVS))
-  const [activeRecipe, setActiveRecipe] = useState(null)
-  const [showAlmost, setShowAlmost] = useState(true)
-  const [search, setSearch] = useState('')
-  const [tab, setTab] = useState('results') // results | favourites
+  const [selected, setSelected] = useState(loadSelected)
+  const [view, setView] = useState('fridge') // fridge | transition | results
+  const [entrance, setEntrance] = useState('closed') // closed | opening | open
+  const [closing, setClosing] = useState(false)
+  const [beat, setBeat] = useState(0)
   const [pickerSearch, setPickerSearch] = useState('')
-  const [mobileTab, setMobileTab] = useState('recipes')
+  const [resultFilter, setResultFilter] = useState('all')
+  const timers = useRef([])
+  const moving = useRef(new Set())
 
-  useEffect(() => saveSet(LS_SELECTED, selected), [selected])
-  useEffect(() => saveSet(LS_FAVS, favs), [favs])
+  useEffect(() => {
+    try { localStorage.setItem(LS_SELECTED, JSON.stringify([...selected])) } catch {}
+  }, [selected])
 
-  const toggle = useCallback(id => {
-    setSelected(prev => {
+  useEffect(() => () => timers.current.forEach(clearTimeout), [])
+
+  const openFridge = useCallback(() => {
+    if (entrance !== 'closed') return
+    setEntrance('opening')
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    timers.current.push(setTimeout(() => setEntrance('open'), reduceMotion ? 80 : 1050))
+  }, [entrance])
+
+  const moveIngredient = useCallback((id, sourceEl) => {
+    if (moving.current.has(id)) return
+    const item = findItem(id)
+    if (!item) return
+    const adding = !selected.has(id)
+    const destination = adding
+      ? document.querySelector(`[data-zone="${item.zone}"] .zone-items`)
+      : document.querySelector(`[data-picker-item="${id}"]`)
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+
+    const commit = () => setSelected(prev => {
       const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
+      if (adding) next.add(id)
+      else next.delete(id)
       return next
     })
-  }, [])
 
-  const toggleFav = useCallback(id => {
-    setFavs(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
+    if (reduceMotion || !sourceEl || !destination) { commit(); return }
+
+    moving.current.add(id)
+    const from = sourceEl.getBoundingClientRect()
+    const to = destination.getBoundingClientRect()
+    const flyer = document.createElement('div')
+    flyer.className = 'ingredient-flyer'
+    flyer.setAttribute('aria-hidden', 'true')
+    flyer.innerHTML = `<span>${item.emoji}</span><small>${item.name}</small>`
+    document.body.appendChild(flyer)
+    Object.assign(flyer.style, {
+      left: `${from.left + from.width / 2}px`,
+      top: `${from.top + from.height / 2}px`,
     })
-  }, [])
-
-  const searching = search.trim().length > 0
-
-  const filteredRecipes = useMemo(() => {
-    if (!searching) return RECIPES
-    const q = search.toLowerCase()
-    return RECIPES.filter(r =>
-      r.name.toLowerCase().includes(q) ||
-      r.description.toLowerCase().includes(q)
-    )
-  }, [search, searching])
-
-  const { canMake, almost } = useMemo(() => {
-    if (selected.size === 0) return { canMake: [], almost: [] }
-
-    const scored = filteredRecipes.map(r => scoreRecipe(r, selected))
-    const canMake = scored
-      .filter(s => s.canMake)
-      .sort((a, b) => b.bonusMatches - a.bonusMatches)
-    const almost = scored
-      .filter(s => !s.canMake && s.totalMissing >= 1 && s.totalMissing <= 3)
-      .sort((a, b) => a.totalMissing - b.totalMissing || b.bonusMatches - a.bonusMatches)
-    return { canMake, almost }
-  }, [selected, filteredRecipes])
-
-  const almostByGroup = useMemo(() => {
-    const groups = {}
-    almost.forEach(s => {
-      const k = s.totalMissing
-      if (!groups[k]) groups[k] = []
-      groups[k].push(s)
+    sourceEl.classList.add('moving-ingredient')
+    const dx = to.left + Math.min(to.width / 2, 54) - (from.left + from.width / 2)
+    const dy = to.top + to.height / 2 - (from.top + from.height / 2)
+    const motion = flyer.animate([
+      { transform: 'translate(-50%, -50%) scale(.9) rotate(0deg)', opacity: 1 },
+      { transform: `translate(calc(-50% + ${dx * .55}px), calc(-50% + ${dy * .25 - 22}px)) scale(1.18) rotate(-7deg)`, opacity: 1, offset: .52 },
+      { transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px)) scale(.72) rotate(4deg)`, opacity: .15 },
+    ], { duration: 620, easing: 'cubic-bezier(.25,.75,.25,1)', fill: 'forwards' })
+    motion.finished.catch(() => {}).finally(() => {
+      commit()
+      flyer.remove()
+      sourceEl.classList.remove('moving-ingredient')
+      moving.current.delete(id)
     })
-    return groups
-  }, [almost])
+  }, [selected])
 
-  const favRecipes = useMemo(
-    () => RECIPES.filter(r => favs.has(r.id)),
-    [favs]
-  )
+  const generate = useCallback(() => {
+    if (view !== 'fridge') return
+    setClosing(true)
+    timers.current.push(setTimeout(() => { setView('transition'); setBeat(0) }, 750))
+    TRANSITION_BEATS.forEach((_, i) => {
+      if (i > 0) timers.current.push(setTimeout(() => setBeat(i), 750 + i * 550))
+    })
+    timers.current.push(setTimeout(() => {
+      setView('results')
+      setClosing(false)
+      window.scrollTo({ top: 0 })
+    }, 750 + TRANSITION_BEATS.length * 550 + 250))
+  }, [view])
 
-  const clearAll = () => setSelected(new Set())
-
-  const surpriseMe = () => {
-    const pool = canMake.length > 0
-      ? canMake.map(s => s.recipe)
-      : filteredRecipes
-    const pick = pool[Math.floor(Math.random() * pool.length)]
-    if (pick) setActiveRecipe(pick)
-  }
-
-  const applyQuickStart = ids => {
-    setSelected(new Set(ids))
-    setMobileTab('recipes')
+  const backToFridge = () => {
+    setView('fridge')
+    window.scrollTo({ top: 0 })
   }
 
   const visibleGroups = useMemo(() => {
@@ -301,14 +287,13 @@ export default function App() {
     const q = pickerSearch.toLowerCase()
     return INGREDIENT_GROUPS.map(g => ({
       ...g,
-      items: g.items.filter(i => i.name.toLowerCase().includes(q))
+      items: g.items.filter(i => i.name.toLowerCase().includes(q)),
     })).filter(g => g.items.length > 0)
   }, [pickerSearch])
 
-  const selectedItems = useMemo(
-    () => ALL_ITEMS.filter(i => selected.has(i.id)),
-    [selected]
-  )
+  const scoredMenu = useMemo(() => MENU.map(d => scoreDish(d, selected)), [selected])
+
+  const matchCount = useMemo(() => scoredMenu.filter(s => s.matched).length, [scoredMenu])
 
   return (
     <div className="app">
@@ -319,280 +304,145 @@ export default function App() {
               what can i cook?
               <Squiggle className="wordmark-squiggle" />
             </h1>
-            <p className="brand-sub">tell it what you have · {RECIPES.length} recipes</p>
+            <p className="brand-sub">open · stock · choose</p>
           </div>
-          <div className="top-actions">
-            <label className="search-box">
-              <svg viewBox="0 0 20 20" className="search-icon" aria-hidden="true">
-                <circle cx="9" cy="9" r="6" fill="none" stroke="currentColor" strokeWidth="2" />
-                <path d="M13.5 13.5 18 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-              </svg>
-              <input
-                className="search-input"
-                placeholder="search recipes…"
-                value={search}
-                onChange={e => { setSearch(e.target.value); setTab('results') }}
-                aria-label="Search recipes"
-              />
-              {searching && (
-                <button className="search-clear" onClick={() => setSearch('')} aria-label="Clear search">✕</button>
-              )}
-            </label>
-            <button className="btn btn-primary" onClick={surpriseMe}>
-              🎲 surprise me
-            </button>
-            <button
-              className={`btn btn-ghost ${tab === 'favourites' ? 'active' : ''}`}
-              onClick={() => setTab(tab === 'favourites' ? 'results' : 'favourites')}
-              aria-pressed={tab === 'favourites'}
-            >
-              ★ favourites{favs.size > 0 && <span className="count-pill">{favs.size}</span>}
-            </button>
-          </div>
+          {view === 'results' ? (
+            <button className="btn btn-ghost" onClick={backToFridge}>← restock the fridge</button>
+          ) : entrance === 'open' ? (
+            <span className="stock-count">{selected.size} stocked</span>
+          ) : (
+            <span className="stock-count">fridge closed</span>
+          )}
         </div>
       </header>
 
-      <nav className="mobile-tabs" aria-label="App sections">
-        <button
-          className={mobileTab === 'ingredients' ? 'on' : ''}
-          onClick={() => setMobileTab('ingredients')}
-        >
-          ingredients{selected.size > 0 && <span className="count-pill">{selected.size}</span>}
-        </button>
-        <button
-          className={mobileTab === 'recipes' ? 'on' : ''}
-          onClick={() => setMobileTab('recipes')}
-        >
-          recipes{selected.size > 0 && canMake.length > 0 && <span className="count-pill">{canMake.length}</span>}
-        </button>
-      </nav>
-
-      <div className="content" data-tab={mobileTab}>
-        <aside className="picker">
-          <div className="picker-head">
-            <h2 className="picker-title">your kitchen</h2>
-            <div className="picker-head-right">
-              <span className="picker-count">{selected.size} picked</span>
-              {selected.size > 0 && (
-                <button className="clear-btn" onClick={clearAll}>clear</button>
-              )}
-            </div>
-          </div>
-
-          <input
-            className="picker-search"
-            placeholder="filter ingredients…"
-            value={pickerSearch}
-            onChange={e => setPickerSearch(e.target.value)}
-            aria-label="Filter ingredients"
-          />
-
-          {visibleGroups.length === 0 && (
-            <p className="picker-empty">nothing matches “{pickerSearch}”</p>
-          )}
-
-          {visibleGroups.map(group => {
-            const picked = group.items.filter(i => selected.has(i.id)).length
-            return (
-              <section key={group.label} className="group">
-                <h3 className="group-label">
-                  {stripEmoji(group.label)}
-                  {picked > 0 && <span className="group-picked">{picked}</span>}
-                  {group.hint && <span className="group-hint">{group.hint}</span>}
-                </h3>
-                <div className="group-items">
-                  {group.items.map(item => (
-                    <button
-                      key={item.id}
-                      className={`ing-btn ${selected.has(item.id) ? 'selected' : ''}`}
-                      onClick={() => toggle(item.id)}
-                      aria-pressed={selected.has(item.id)}
-                    >
-                      <span className="ing-emoji" aria-hidden="true">{item.emoji}</span>
-                      <span className="ing-name">{item.name}</span>
-                      {selected.has(item.id) && <span className="ing-check" aria-hidden="true">✓</span>}
-                    </button>
-                  ))}
-                </div>
-              </section>
-            )
-          })}
-
-          {selected.size > 0 && (
-            <button className="btn btn-primary see-recipes" onClick={() => setMobileTab('recipes')}>
-              see recipes →
-            </button>
-          )}
-        </aside>
-
-        <main className="results">
-          {tab !== 'favourites' && selected.size > 0 && (
-            <div className="shelf" aria-label="Your selected ingredients">
-              <span className="shelf-label">on your shelf</span>
-              <div className="shelf-chips">
-                {selectedItems.map(item => (
-                  <button key={item.id} className="shelf-chip" onClick={() => toggle(item.id)}
-                    aria-label={`Remove ${item.name}`}>
-                    {item.emoji} {item.name} <span className="shelf-x" aria-hidden="true">✕</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {tab === 'favourites' ? (
-            <section className="result-section">
-              <div className="section-header sage">
-                <h2 className="section-title">your favourites</h2>
-                <span className="section-count">{favRecipes.length}</span>
-              </div>
-              {favRecipes.length === 0 ? (
-                <div className="soft-empty">
-                  <p className="soft-empty-title">nothing saved yet</p>
-                  <p>tap the ☆ on any recipe and it waits for you here.</p>
-                </div>
-              ) : (
-                <div className="recipe-grid">
-                  {favRecipes.map((recipe, i) => (
-                    <RecipeCard key={recipe.id} recipe={recipe} selectedSet={selected}
-                      onSelect={setActiveRecipe} isFav={favs.has(recipe.id)}
-                      onToggleFav={toggleFav} index={i} />
-                  ))}
-                </div>
-              )}
-            </section>
-          ) : searching ? (
-            <section className="result-section">
-              <div className="section-header sage">
-                <h2 className="section-title">results for “{search.trim()}”</h2>
-                <span className="section-count">{filteredRecipes.length}</span>
-              </div>
-              {filteredRecipes.length === 0 ? (
-                <div className="soft-empty">
-                  <p className="soft-empty-title">no recipes match that</p>
-                  <p>try a simpler word — “egg”, “rice”, “soup”.</p>
-                </div>
-              ) : (
-                <div className="recipe-grid">
-                  {filteredRecipes.map((recipe, i) => (
-                    <RecipeCard key={recipe.id} recipe={recipe} selectedSet={selected}
-                      onSelect={setActiveRecipe} isFav={favs.has(recipe.id)}
-                      onToggleFav={toggleFav} index={i} />
-                  ))}
-                </div>
-              )}
-            </section>
-          ) : selected.size === 0 ? (
-            <div className="empty-state">
-              <img
-                className="empty-doodle"
-                src={`${import.meta.env.BASE_URL}doodle-empty.png`}
-                alt="Doodle of an open fridge surrounded by an egg, tomato, carrot, cheese and a milk bottle"
-              />
-              <h2 className="empty-title">open your fridge</h2>
-              <p className="empty-copy">
-                pick your cookware and whatever ingredients you have lying around,
-                and i'll find something worth making. even one thing is enough — try 🥑 alone.
-              </p>
-              <div className="quick-starts">
-                <span className="quick-label">or start with:</span>
-                {QUICK_STARTS.map(q => (
-                  <button key={q.label} className="quick-btn" onClick={() => applyQuickStart(q.ids)}>
-                    {q.label}
-                  </button>
-                ))}
-              </div>
+      {view !== 'results' && (
+        <main className={`fridge-view ${view === 'transition' ? 'transitioning' : ''}`}>
+          {entrance !== 'open' ? (
+            <div className="entrance-wrap">
+              <ClosedKitchen state={entrance} onOpen={openFridge} />
             </div>
           ) : (
             <>
-              <section className="result-section">
-                <div className="section-header sage">
-                  <h2 className="section-title">make it now</h2>
-                  <span className="section-count">{canMake.length}</span>
-                </div>
-                {canMake.length === 0 ? (
-                  <div className="soft-empty">
-                    <p>nothing complete yet — peek at <strong>almost there</strong> below, or add one or two more things.</p>
-                  </div>
-                ) : (
-                  <div className="recipe-grid">
-                    {canMake.map(({ recipe }, i) => (
-                      <RecipeCard key={recipe.id} recipe={recipe} selectedSet={selected}
-                        onSelect={setActiveRecipe} isFav={favs.has(recipe.id)}
-                        onToggleFav={toggleFav} index={i} />
+          <div className="kitchen-wrap kitchen-reveal">
+            <Kitchen selected={selected} onRemove={moveIngredient} closing={closing} />
+          </div>
+
+          <aside className="picker picker-reveal">
+            <div className="picker-head">
+              <h2 className="picker-title">stock your kitchen</h2>
+              {selected.size > 0 && (
+                <button className="clear-btn" onClick={() => setSelected(new Set())}>empty it all</button>
+              )}
+            </div>
+            <p className="picker-hint">tap what you have - it lands right on the shelf</p>
+
+            <input
+              className="picker-search"
+              placeholder="filter ingredients…"
+              value={pickerSearch}
+              onChange={e => setPickerSearch(e.target.value)}
+              aria-label="Filter ingredients"
+            />
+
+            {visibleGroups.length === 0 && (
+              <p className="picker-empty">nothing matches “{pickerSearch}”</p>
+            )}
+
+            {visibleGroups.map(group => {
+              const picked = group.items.filter(i => selected.has(i.id)).length
+              return (
+                <section key={group.label} className="group">
+                  <h3 className="group-label">
+                    {group.label}
+                    {picked > 0 && <span className="group-picked">{picked}</span>}
+                  </h3>
+                  <div className="group-items">
+                    {group.items.map(item => (
+                      <button
+                        key={item.id}
+                        className={`ing-btn ${selected.has(item.id) ? 'selected' : ''}`}
+                        onClick={event => moveIngredient(item.id, event.currentTarget)}
+                        data-picker-item={item.id}
+                        aria-pressed={selected.has(item.id)}
+                      >
+                        <span className="ing-emoji" aria-hidden="true">{item.emoji}</span>
+                        <span className="ing-name">{item.name}</span>
+                        {selected.has(item.id) && <span className="ing-check" aria-hidden="true">✓</span>}
+                      </button>
                     ))}
                   </div>
-                )}
-              </section>
-
-              {almost.length > 0 && (
-                <section className="result-section almost-section">
-                  <button
-                    className="section-header tan collapsible"
-                    onClick={() => setShowAlmost(v => !v)}
-                    aria-expanded={showAlmost}
-                  >
-                    <h2 className="section-title">almost there</h2>
-                    <span className="section-count">{almost.length}</span>
-                    <span className="collapse-icon" aria-hidden="true">{showAlmost ? '–' : '+'}</span>
-                  </button>
-
-                  {showAlmost && [1, 2, 3].map(n => {
-                    const group = almostByGroup[n]
-                    if (!group || group.length === 0) return null
-                    return (
-                      <div key={n} className="almost-group">
-                        <div className="almost-group-label">
-                          {n === 1 ? 'one thing away' : `${n} things away`} · {group.length}
-                        </div>
-                        <div className="recipe-grid">
-                          {group.map(({ recipe, missingRequired, missingCookware }, i) => (
-                            <div key={recipe.id} className="almost-card-wrapper">
-                              <div className="missing-badge">
-                                <span className="missing-word">missing</span>
-                                {missingRequired.map(id => {
-                                  const item = findItem(id)
-                                  return item ? (
-                                    <span key={id} className="missing-chip">{item.emoji} {item.name}</span>
-                                  ) : null
-                                })}
-                                {missingCookware ? (
-                                  <span className="missing-chip">🍳 cookware</span>
-                                ) : null}
-                              </div>
-                              <RecipeCard
-                                recipe={recipe}
-                                selectedSet={selected}
-                                onSelect={setActiveRecipe}
-                                isFav={favs.has(recipe.id)}
-                                onToggleFav={toggleFav}
-                                index={i}
-                              />
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )
-                  })}
                 </section>
-              )}
+              )
+            })}
+          </aside>
             </>
           )}
 
-          <footer className="foot">
-            made by <a href="https://lormaigai.github.io" target="_blank" rel="noreferrer">angela</a> ·
-            your picks stay in your browser
-          </footer>
-        </main>
-      </div>
+          {entrance === 'open' && <div className="generate-bar">
+            <div className="generate-inner">
+              <span className="generate-note">
+                {selected.size === 0
+                  ? 'nothing stocked yet - browse the full menu'
+                  : `${selected.size} ingredient${selected.size === 1 ? '' : 's'} stocked`}
+              </span>
+              <button className="btn btn-primary btn-generate" onClick={generate}>
+                what can i cook? →
+              </button>
+            </div>
+          </div>}
 
-      <RecipeModal
-        recipe={activeRecipe}
-        selectedSet={selected}
-        onClose={() => setActiveRecipe(null)}
-        isFav={activeRecipe ? favs.has(activeRecipe.id) : false}
-        onToggleFav={toggleFav}
-      />
+          {view === 'transition' && (
+            <div className="transition-overlay" role="status" aria-live="polite">
+              <div className="transition-card">
+                <span className="transition-mark" aria-hidden="true"><span /><span /><span /></span>
+                <p className="transition-text">{TRANSITION_BEATS[beat]}</p>
+                <div className="transition-dots" aria-hidden="true">
+                  <span /><span /><span />
+                </div>
+              </div>
+            </div>
+          )}
+        </main>
+      )}
+
+      {view === 'results' && (
+        <main className="results-view">
+          <div className="menu-frame">
+            <p className="menu-kicker">tonight's menu, from your fridge</p>
+            <h2 className="menu-wordmark">today's menu</h2>
+            <p className="menu-sub">
+              {matchCount > 0
+                ? `${matchCount} dish${matchCount === 1 ? '' : 'es'} ready with what you stocked`
+                : 'nothing fully stocked - here is the whole menu anyway'}
+            </p>
+          </div>
+
+          <nav className="meal-filters" aria-label="Filter dishes by meal type">
+            <button className={`meal-filter ${resultFilter === 'all' ? 'active' : ''}`} onClick={() => setResultFilter('all')} aria-pressed={resultFilter === 'all'}>All dishes</button>
+            {MEALS.map(meal => (
+              <button key={meal.id} className={`meal-filter ${resultFilter === meal.id ? 'active' : ''}`} onClick={() => setResultFilter(meal.id)} aria-pressed={resultFilter === meal.id}>
+                {meal.label}
+              </button>
+            ))}
+          </nav>
+
+          {MEALS.filter(meal => resultFilter === 'all' || resultFilter === meal.id).map(meal => (
+            <MealSection
+              key={meal.id}
+              meal={meal}
+              dishes={scoredMenu.filter(s => s.dish.meal === meal.id)}
+              selectedSet={selected}
+            />
+          ))}
+
+          <div className="results-foot-row">
+            <button className="btn btn-primary" onClick={backToFridge}>← restock the fridge</button>
+          </div>
+
+          <footer className="foot">your picks stay in your browser</footer>
+        </main>
+      )}
     </div>
   )
 }
