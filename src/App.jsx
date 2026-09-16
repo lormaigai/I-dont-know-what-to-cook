@@ -159,7 +159,6 @@ function MealSection({ meal, dishes, selectedSet }) {
   return (
     <section className="meal-section">
       <div className="meal-header">
-        <span className="meal-emoji" aria-hidden="true">{meal.emoji}</span>
         <h2 className="meal-title">{meal.label}</h2>
         {matched.length > 0 && <span className="meal-count">{matched.length} from your fridge</span>}
       </div>
@@ -305,7 +304,7 @@ export default function App() {
               what can i cook?
               <Squiggle className="wordmark-squiggle" />
             </h1>
-            <p className="brand-sub">stock the fridge · get tonight's menu</p>
+            <p className="brand-sub">open · stock · choose</p>
           </div>
           {view === 'results' ? (
             <button className="btn btn-ghost" onClick={backToFridge}>← restock the fridge</button>
@@ -384,8 +383,8 @@ export default function App() {
             <div className="generate-inner">
               <span className="generate-note">
                 {selected.size === 0
-                  ? 'the fridge is empty - the whole menu it is'
-                  : `${selected.size} thing${selected.size === 1 ? '' : 's'} in the kitchen`}
+                  ? 'nothing stocked yet - browse the full menu'
+                  : `${selected.size} ingredient${selected.size === 1 ? '' : 's'} stocked`}
               </span>
               <button className="btn btn-primary btn-generate" onClick={generate}>
                 what can i cook? →
@@ -396,7 +395,7 @@ export default function App() {
           {view === 'transition' && (
             <div className="transition-overlay" role="status" aria-live="polite">
               <div className="transition-card">
-                <span className="transition-emoji" aria-hidden="true">🍽️</span>
+                <span className="transition-mark" aria-hidden="true"><span /><span /><span /></span>
                 <p className="transition-text">{TRANSITION_BEATS[beat]}</p>
                 <div className="transition-dots" aria-hidden="true">
                   <span /><span /><span />
@@ -423,7 +422,7 @@ export default function App() {
             <button className={`meal-filter ${resultFilter === 'all' ? 'active' : ''}`} onClick={() => setResultFilter('all')} aria-pressed={resultFilter === 'all'}>All dishes</button>
             {MEALS.map(meal => (
               <button key={meal.id} className={`meal-filter ${resultFilter === meal.id ? 'active' : ''}`} onClick={() => setResultFilter(meal.id)} aria-pressed={resultFilter === meal.id}>
-                <span aria-hidden="true">{meal.emoji}</span> {meal.label}
+                {meal.label}
               </button>
             ))}
           </nav>
