@@ -200,6 +200,7 @@ export default function App() {
   const [closing, setClosing] = useState(false)
   const [beat, setBeat] = useState(0)
   const [pickerSearch, setPickerSearch] = useState('')
+  const [resultFilter, setResultFilter] = useState('all')
   const timers = useRef([])
   const moving = useRef(new Set())
 
@@ -418,7 +419,16 @@ export default function App() {
             </p>
           </div>
 
-          {MEALS.map(meal => (
+          <nav className="meal-filters" aria-label="Filter dishes by meal type">
+            <button className={`meal-filter ${resultFilter === 'all' ? 'active' : ''}`} onClick={() => setResultFilter('all')} aria-pressed={resultFilter === 'all'}>All dishes</button>
+            {MEALS.map(meal => (
+              <button key={meal.id} className={`meal-filter ${resultFilter === meal.id ? 'active' : ''}`} onClick={() => setResultFilter(meal.id)} aria-pressed={resultFilter === meal.id}>
+                <span aria-hidden="true">{meal.emoji}</span> {meal.label}
+              </button>
+            ))}
+          </nav>
+
+          {MEALS.filter(meal => resultFilter === 'all' || resultFilter === meal.id).map(meal => (
             <MealSection
               key={meal.id}
               meal={meal}

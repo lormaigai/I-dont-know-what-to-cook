@@ -637,3 +637,41 @@ button { font-family: inherit; }
 .ingredient-flyer small { margin-top: 3px; font-size: .58rem; font-weight: 700; color: var(--ink-soft); }
 .moving-ingredient { opacity: .28; pointer-events: none; }
 @media (prefers-reduced-motion: reduce) { .ingredient-flyer { display: none; } }
+
+/* Results meal-type filters */
+.meal-filters {
+  position: sticky;
+  top: 76px;
+  z-index: 30;
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  overflow-x: auto;
+  padding: .65rem;
+  margin: -1rem auto 1.8rem;
+  width: fit-content;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  background: rgba(255,253,249,.95);
+  box-shadow: var(--shadow);
+  scrollbar-width: none;
+}
+.meal-filters::-webkit-scrollbar { display: none; }
+.meal-filter {
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  border-radius: 99px;
+  padding: .5rem .85rem;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: .78rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+.meal-filter:hover { color: var(--ink); background: var(--cream); }
+.meal-filter.active { color: var(--cream); background: var(--ink); }
+.meal-filter:focus-visible { outline: 2px solid var(--tan-deep); outline-offset: 2px; }
+@media (max-width: 600px) {
+  .meal-filters { top: 88px; width: calc(100% + .5rem); justify-content: flex-start; margin-left: -.25rem; border-radius: 16px; }
+}
